@@ -1,0 +1,17 @@
+# data
+dataset_npz
+dataset_npz_old
+logs
+videos
+results
+vis_backround_image
+_get_all_result.py
+_feature_vis.py
+.vscode
+vislogs
+*.npy
+# *.csv
+figures/*.txt
+
+__pycache__
+.DS_Store
