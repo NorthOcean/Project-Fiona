@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:39:34
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-16 16:27:24
+LastEditTime: 2020-09-28 20:48:47
 @Description: classes and methods of training model
 '''
 import os
@@ -104,7 +104,7 @@ class Base_Model():
         self.loss_eval_namelist = ['ADE', 'FDE']
         return calculate_ADE(model_output[0], gt).numpy(), calculate_FDE(model_output[0], gt).numpy()
 
-    def prepare_model_inputs_all(self, input_agents):
+    def prepare_model_inputs_all(self, input_agents, calculate_neighbor=False):
         model_inputs = []
         gt = []
         agent_index = []
@@ -112,6 +112,10 @@ class Base_Model():
             model_inputs.append(agent.get_train_traj())
             gt.append(agent.get_gt_traj())
             agent_index.append(agent_index_current)
+
+            if calculate_neighbor and agent.neighbor_number:
+                for traj in agent.get_neighbor_traj():
+                    model_inputs.append(traj)
 
         model_inputs = tf.cast(tf.stack(model_inputs), tf.float32)
         gt = tf.cast(tf.stack(gt), tf.float32)
@@ -312,6 +316,9 @@ class Base_Model():
             with open('./results/path-{}{}.txt'.format(model_name, self.args.test_set), 'w+') as f:
                 f.write(self.model_save_path.split('.h5')[0])
 
+    def pred_process(self, pred:np.ndarray, obs=0):
+        return pred
+        
     def test_batch(self, agents_test, test_on_neighbors=False, draw_results=True, batch_size=0.2, save_agents=False, social_refine=False):
         """
         Eval model on test sets.
@@ -351,7 +358,7 @@ class Base_Model():
             batch_loss = []
             [test_tensor, _], _ = self.prepare_model_inputs_all(agents_batch[batch_index], calculate_neighbor=test_on_neighbors)
             pred = self.forward_train(test_tensor)
-            pred = pred[0].numpy()
+            pred = self.pred_process(pred[0].numpy(), obs=test_tensor.numpy())
 
             for agent_index, index in enumerate(test_index[batch_index]):
                 current_pred = pred[index]
@@ -383,12 +390,12 @@ class Base_Model():
                 result_agents += agents_batch[batch_index]
 
             # draw results only
-            for index in range(len(result_agents)):
-                result_agents[index].draw_results(self.log_dir, '{}.png'.format(index), draw_neighbors=False)
+            # for index in range(len(result_agents)):
+            #     result_agents[index].draw_results(self.log_dir, '{}.png'.format(index), draw_neighbors=False)
             
             # draw results on video frames
-            # tv = TrajVisual(save_base_path=self.args.log_dir, verbose=True, draw_neighbors=False, social_refine=social_refine)
-            # tv.visual(result_agents, dataset=self.args.test_set)
+            tv = TrajVisual(save_base_path=self.args.log_dir, verbose=True, draw_neighbors=False, social_refine=social_refine)
+            tv.visual(result_agents, dataset=self.args.test_set)
 
         if save_agents:
             result_agents = []
@@ -465,6 +472,100 @@ class Base_Model():
         return agents_batch, test_index
 
 
+class Fiona(Base_Model):
+    def __init__(self, train_info, args):
+        super().__init__(train_info, args)
+        self.rp = [5, 11]
+        self.n_rp = len(self.rp)
+
+    def create_model(self):
+        positions = keras.layers.Input(shape=[self.obs_frames, 2])
+        start_point = tf.reshape(positions[:, -1, :], [-1, 1, 2])
+        
+        positions_n = positions - start_point
+        positions_embadding_lstm = keras.layers.Dense(64)(positions_n)
+        positions_embadding_state = keras.layers.Dense(64)(positions)
+        traj_feature = keras.layers.LSTM(64, return_sequences=True)(positions_embadding_lstm)
+
+        concat_feature = tf.concat([traj_feature, positions_embadding_state], axis=-1)
+        feature_fc1 = keras.layers.Dense(64)(concat_feature)
+        feature_flatten = tf.reshape(feature_fc1, [-1, self.obs_frames * 64])
+        feature_fc = keras.layers.Dense(self.n_rp * 64)(feature_flatten)
+        feature_reshape = tf.reshape(feature_fc, [-1, self.n_rp, 64])
+        output5 = keras.layers.Dense(2)(feature_reshape)
+        output5 = output5 + start_point
+        lstm = keras.Model(inputs=positions, outputs=[output5])
+
+        lstm.build(input_shape=[None, self.obs_frames, 2])
+        lstm_optimizer = keras.optimizers.Adam(lr=self.args.lr)
+        
+        return lstm, lstm_optimizer
+    
+    def loss(self, model_output, gt, obs='null'):
+        """
+        Train loss
+        """
+        self.loss_namelist = ['ADE_t']
+        loss_ADE = calculate_ADE(model_output[0], tf.transpose(tf.stack([gt[:, n, :] for n in self.rp]), [1, 0, 2]))
+        loss_list = tf.stack([loss_ADE])
+        return loss_ADE, loss_list
+
+    def loss_eval(self, model_output, gt, obs='null'):
+        """
+        Eval metrics, using ADE and FDE by default.
+        return: `np.array`
+        """
+        self.loss_eval_namelist = ['ADE', 'FDE']
+        return calculate_ADE(model_output[0], tf.transpose(tf.stack([gt[:, n, :] for n in self.rp]), [1, 0, 2])).numpy(), 0
+
+    def pred_process(self, pred, obs):
+        xp = [0] + [p+1 for p in self.rp]
+        pred_f = np.zeros([pred.shape[0], self.args.pred_frames, 2])
+        for p_index, [p, o] in enumerate(zip(pred, obs)):
+            p_current = np.concatenate([o[-1].reshape([1, 2]), p], axis=0)
+            for index in range(self.args.pred_frames):
+                pred_f[p_index, index] = np.array([
+                    np.interp(index+1, xp, p_current.T[0]),
+                    np.interp(index+1, xp, p_current.T[1]),
+                ])
+        return pred_f
+
+
+class SS_LSTM(Base_Model):
+    """
+    `S`tate and `S`equence `LSTM`
+    """
+    def __init__(self, train_info, args):
+        super().__init__(train_info, args)
+
+    def create_model(self):
+        positions = keras.layers.Input(shape=[self.obs_frames, 2])
+        start_point = tf.reshape(positions[:, -1, :], [-1, 1, 2])
+        
+        positions_n = positions - start_point
+        positions_embadding_lstm = keras.layers.Dense(64)(positions_n)
+        positions_embadding_state = keras.layers.Dense(64)(positions)
+        traj_feature = keras.layers.LSTM(64, return_sequences=True)(positions_embadding_lstm)
+
+        concat_feature = tf.concat([traj_feature, positions_embadding_state], axis=-1)
+        feature_fc1 = keras.layers.Dense(64)(concat_feature)
+        feature_flatten = tf.reshape(feature_fc1, [-1, self.obs_frames * 64])
+        feature_fc = keras.layers.Dense(self.pred_frames * 64)(feature_flatten)
+        feature_reshape = tf.reshape(feature_fc, [-1, self.pred_frames, 64])
+        output5 = keras.layers.Dense(2)(feature_reshape)
+        output5 = output5 + start_point
+        lstm = keras.Model(inputs=positions, outputs=[output5])
+
+        lstm.build(input_shape=[None, self.obs_frames, 2])
+        lstm_optimizer = keras.optimizers.Adam(lr=self.args.lr)
+        
+        return lstm, lstm_optimizer
+
+    def get_feature(self, inputs):
+        submodel = keras.Model(inputs=self.model.input, outputs=self.model.get_layer('tf_op_layer_Reshape_1').output)
+        return submodel(inputs)
+
+        
 class BGM(Base_Model):
     """
     `B`uilding a Dynamic `G`uidance `M`ap for Trajectory Prediction

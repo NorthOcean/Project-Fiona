@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:39:02
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-16 16:46:14
+LastEditTime: 2020-09-28 10:51:45
 @Description: file content
 '''
 import os
@@ -96,11 +96,17 @@ class DataManager():
             index = set([i for i in range(sample_number_original)])
             if USE_SEED:
                 random.seed(SEED)
-            train_index = random.sample(index, int(sample_number_original * self.args.train_percent))
+            
+            train_percent = self.args.train_percent[0]
+            if train_percent == 0.0:
+                raise
+            train_index = random.sample(index, int(sample_number_original * train_percent))
             test_index = list(index - set(train_index))
+            test_index.sort()
             
             test_agents = self.sample_data(data_managers_train[0], test_index)
             train_agents = self.sample_data(data_managers_train[0], train_index)
+            
             if self.args.reverse:
                 train_agents += self.sample_data(data_managers_train[0], train_index, reverse=True, desc='Preparing reverse data')
                 sample_time += 1
