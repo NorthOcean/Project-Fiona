@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:39:02
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-28 10:51:45
+LastEditTime: 2020-09-30 09:21:42
 @Description: file content
 '''
 import os
@@ -560,6 +560,9 @@ class Agent_Part():
     def write_pred_sr(self, pred):
         self.pred_sr = pred
         self.sr = True
+
+    def write_social_map(self, mapp):
+        self.social_map = mapp
 
     def write_pred_neighbor(self, pred):
         self.neighbor_pred = self.pred_fix_neighbor(pred)

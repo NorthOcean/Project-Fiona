@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:39:34
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-28 20:48:47
+LastEditTime: 2020-09-30 15:08:33
 @Description: classes and methods of training model
 '''
 import os
@@ -15,6 +15,7 @@ from tensorflow import keras
 from tqdm import tqdm
 
 from GridRefine import SocialRefine_one
+from ContextMap import context_refine, MapManager
 from helpmethods import calculate_ADE_FDE_numpy, dir_check, list2array
 from sceneFeature import TrajectoryMapManager
 from visual import TrajVisual
@@ -350,6 +351,9 @@ class Base_Model():
             test_on_neighbors = True
 
         agents_batch, test_index = self.prepare_test_agents_batch(agents_batch, test_on_neighbors)
+
+        if social_refine:
+            context_maps = [MapManager(agents_batch[index], self.args, calculate_guidance=True) for index in agents_batch]
         
         # run test
         all_loss = []
@@ -367,13 +371,14 @@ class Base_Model():
                     agents_batch[batch_index][agent_index].write_pred_neighbor(current_pred[1:])
                 
                 if social_refine:
-                    agents_batch[batch_index][agent_index].write_pred_sr(SocialRefine_one(
-                        agent=agents_batch[batch_index][agent_index],
-                        args=self.args,
-                        epochs=10,
-                        save=False,
-                    ))
-                
+                    guidance_map = context_maps[batch_index].guidance_map
+                    mm = MapManager([agents_batch[batch_index][agent_index]], self.args, init_manager=context_maps[batch_index], calculate_social=True)
+                    social_map = mm.social_map
+                    
+                    social_pred = mm.run_optimize(0.6 * guidance_map + 0.4 * social_map)
+                    agents_batch[batch_index][agent_index].write_pred_sr(social_pred)
+                    agents_batch[batch_index][agent_index].write_social_map(social_map)
+
                 loss = agents_batch[batch_index][agent_index].calculate_loss(SR=social_refine)
                 all_loss.append(loss)
                 batch_loss.append(loss)
@@ -475,7 +480,7 @@ class Base_Model():
 class Fiona(Base_Model):
     def __init__(self, train_info, args):
         super().__init__(train_info, args)
-        self.rp = [5, 11]
+        self.rp = [11]
         self.n_rp = len(self.rp)
 
     def create_model(self):

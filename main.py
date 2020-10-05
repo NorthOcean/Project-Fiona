@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:38:24
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-28 19:18:02
+LastEditTime: 2020-09-30 10:50:12
 @Description: main of Fiona
 '''
 import argparse
@@ -82,13 +82,19 @@ def get_parser():
     parser.add_argument('--calculate_social', type=int, default=False)
 
     # SR args
-    parser.add_argument('--grid_shape_x', type=int, default=700)
-    parser.add_argument('--grid_shape_y', type=int, default=700)
-    parser.add_argument('--grid_length', type=float, default=0.1)   # 网格的真实长度
+    # parser.add_argument('--grid_shape_x', type=int, default=700)
+    # parser.add_argument('--grid_shape_y', type=int, default=700)
+    # parser.add_argument('--grid_length', type=float, default=0.1)   # 网格的真实长度
+
+    parser.add_argument('--window_size_expand_meter', type=float, default=10.0) # 网格的扩展区域尺寸
+    parser.add_argument('--window_size_guidance_map', type=int, default=10) # guidance map的分辨率 (格/米)
+    parser.add_argument('--window_size_social_map', type=int, default=10) # social map的分辨率 (格/米)
     parser.add_argument('--avoid_size', type=int, default=15)   # 主动避让的半径网格尺寸
     parser.add_argument('--interest_size', type=int, default=20)   # 原本感兴趣的预测区域
-    # parser.add_argument('--social_size', type=int, default=1)   # 互不侵犯的半径网格尺寸
+    parser.add_argument('--social_size', type=int, default=1)   # 互不侵犯的半径网格尺寸
     parser.add_argument('--max_refine', type=float, default=0.8)   # 最大修正尺寸
+    parser.add_argument('--refine_epochs', type=int, default=10)
+    parser.add_argument('--theta', type=float, default=0.001)
 
     # Guidance Map args
     parser.add_argument('--gridmapsize', type=int, default=32)
@@ -110,6 +116,16 @@ def load_args(save_args_path, current_args):
     save_args.load = current_args.load
     save_args.draw_results = current_args.draw_results
     save_args.sr_enable = current_args.sr_enable
+    save_args.window_size_expand_meter = current_args.window_size_expand_meter
+    save_args.window_size_guidance_map = current_args.window_size_guidance_map
+    save_args.window_size_social_map = current_args.window_size_social_map
+
+    save_args.interest_size = current_args.interest_size
+    save_args.avoid_size = current_args.avoid_size
+    save_args.max_refine = current_args.max_refine
+
+    save_args.refine_epochs = current_args.refine_epochs
+    save_args.theta = current_args.theta
     return save_args
 
 
