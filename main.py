@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:38:24
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-30 10:50:12
+LastEditTime: 2020-10-05 10:05:19
 @Description: main of Fiona
 '''
 import argparse
@@ -15,7 +15,7 @@ import tensorflow as tf
 from matplotlib.axes._axes import _log as matplotlib_axes_logger
 
 from helpmethods import dir_check
-from models import BGM, Linear, Fiona, SS_LSTM
+from models import BGM, Linear, Fiona_decoder, SS_LSTM, Fiona
 from PrepareTrainData import DataManager
 
 matplotlib_axes_logger.setLevel('ERROR')        # 画图警告
@@ -149,6 +149,8 @@ def main():
     
     if args.model == 'bgm':
         model = BGM
+    elif args.model == 'Fd':
+        model = Fiona_decoder
     elif args.model == 'F':
         model = Fiona
     elif args.model == 'M':

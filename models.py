@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:39:34
 LastEditors: Conghao Wong
-LastEditTime: 2020-09-30 15:08:33
+LastEditTime: 2020-10-17 16:30:37
 @Description: classes and methods of training model
 '''
 import os
@@ -362,6 +362,9 @@ class Base_Model():
             batch_loss = []
             [test_tensor, _], _ = self.prepare_model_inputs_all(agents_batch[batch_index], calculate_neighbor=test_on_neighbors)
             pred = self.forward_train(test_tensor)
+
+            # np.save('./attentionscore{}.npy'.format(batch_index), pred[1].numpy())
+            
             pred = self.pred_process(pred[0].numpy(), obs=test_tensor.numpy())
 
             for agent_index, index in enumerate(test_index[batch_index]):
@@ -477,7 +480,7 @@ class Base_Model():
         return agents_batch, test_index
 
 
-class Fiona(Base_Model):
+class Fiona_decoder(Base_Model):
     def __init__(self, train_info, args):
         super().__init__(train_info, args)
         self.rp = [11]
@@ -494,6 +497,7 @@ class Fiona(Base_Model):
 
         concat_feature = tf.concat([traj_feature, positions_embadding_state], axis=-1)
         feature_fc1 = keras.layers.Dense(64)(concat_feature)
+        
         feature_flatten = tf.reshape(feature_fc1, [-1, self.obs_frames * 64])
         feature_fc = keras.layers.Dense(self.n_rp * 64)(feature_flatten)
         feature_reshape = tf.reshape(feature_fc, [-1, self.n_rp, 64])
@@ -511,9 +515,105 @@ class Fiona(Base_Model):
         Train loss
         """
         self.loss_namelist = ['ADE_t']
-        loss_ADE = calculate_ADE(model_output[0], tf.transpose(tf.stack([gt[:, n, :] for n in self.rp]), [1, 0, 2]))
+        
+        gt = tf.transpose(tf.stack([gt[:, n, :] for n in self.rp]), [1, 0, 2])
+        pred = model_output[0]
+        
+        loss_ADE = calculate_ADE(pred, gt)
         loss_list = tf.stack([loss_ADE])
         return loss_ADE, loss_list
+
+    def loss_eval(self, model_output, gt, obs='null'):
+        """
+        Eval metrics, using ADE and FDE by default.
+        return: `np.array`
+        """
+        self.loss_eval_namelist = ['ADE', 'FDE']
+        return calculate_ADE(model_output[0], tf.transpose(tf.stack([gt[:, n, :] for n in self.rp]), [1, 0, 2])).numpy(), 0
+
+    def pred_process(self, pred, obs):
+        xp = [0] + [p+1 for p in self.rp]
+        pred_f = np.zeros([pred.shape[0], self.args.pred_frames, 2])
+        for p_index, [p, o] in enumerate(zip(pred, obs)):
+            p_current = np.concatenate([o[-1].reshape([1, 2]), p], axis=0)
+            for index in range(self.args.pred_frames):
+                pred_f[p_index, index] = np.array([
+                    np.interp(index+1, xp, p_current.T[0]),
+                    np.interp(index+1, xp, p_current.T[1]),
+                ])
+        return pred_f
+
+
+class Fiona(Base_Model):
+    def __init__(self, train_info, args):
+        super().__init__(train_info, args)
+        self.rp = [5, 11]
+        self.n_rp = len(self.rp)
+
+    def create_model(self):
+        positions = keras.layers.Input(shape=[self.obs_frames, 2])
+        start_point = tf.reshape(positions[:, -1, :], [-1, 1, 2])
+        
+        positions_n = positions - start_point
+        positions_embadding_lstm = keras.layers.Dense(64)(positions_n)
+        positions_embadding_state = keras.layers.Dense(64)(positions)
+        traj_feature = keras.layers.LSTM(64, return_sequences=True)(positions_embadding_lstm)
+        concat_feature = tf.concat([traj_feature, positions_embadding_state], axis=-1)
+
+        # soft attention
+        x = traj_feature # shape = [batch, obs, 128]
+        xT = tf.transpose(x, [0, 2, 1])
+        dot = tf.matmul(x, xT) / tf.sqrt(64.0)
+        score = keras.layers.Softmax()(dot)
+        x_new = tf.matmul(score, x)
+
+        # hard attention
+        diag = tf.linalg.diag_part(x_new)               # shape = [batch, obs]
+        diag_forward = diag[:, 1:-1] - diag[:, 0:-2]    # shape = [batch, obs-2]
+        diag_back = diag[:, 1:-1] - diag[:, 2:]
+        index = tf.argmax(diag_back * diag_forward, axis=1, output_type=tf.int32) # shape = [batch]
+        
+        med_feature = tf.gather(concat_feature, index + tf.ones_like(index), batch_dims=1)
+        hard_feature = tf.transpose(tf.stack([
+            concat_feature[:, 0, :],
+            med_feature,
+            concat_feature[:, -1, :],
+        ]), [1, 0, 2])
+        
+        feature_fc1 = keras.layers.Dense(64)(hard_feature)
+        dropout = keras.layers.Dropout(self.args.dropout)(feature_fc1)
+        
+        feature_flatten = tf.reshape(dropout, [-1, 3 * 64])
+        feature_fc = keras.layers.Dense(self.n_rp * 64)(feature_flatten)
+        dropout1 = keras.layers.Dropout(self.args.dropout)(feature_fc)
+        feature_reshape = tf.reshape(dropout1, [-1, self.n_rp, 64])
+        output5 = keras.layers.Dense(2)(feature_reshape) + start_point
+
+        lstm = keras.Model(inputs=positions, outputs=[output5, diag])
+        lstm.build(input_shape=[None, self.obs_frames, 2])
+        lstm_optimizer = keras.optimizers.Adam(lr=self.args.lr)
+        
+        return lstm, lstm_optimizer
+    
+    def loss(self, model_output, gt, obs='null'):
+        """
+        Train loss
+        """
+        self.loss_namelist = ['max_error']
+        
+        gt = tf.transpose(tf.stack([gt[:, n, :] for n in self.rp]), [1, 0, 2])
+        pred = model_output[0]
+
+        # max distance loss
+        distance = tf.linalg.norm(gt - pred, ord=2, axis=2)
+        max_distance = tf.reduce_max(distance, axis=1)
+        loss = tf.reduce_mean(max_distance)
+
+        # ADE
+        # loss = calculate_ADE(pred, gt)
+        
+        loss_list = tf.stack([loss])
+        return loss, loss_list
 
     def loss_eval(self, model_output, gt, obs='null'):
         """
