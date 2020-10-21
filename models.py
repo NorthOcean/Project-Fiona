@@ -2,7 +2,7 @@
 @Author: ConghaoWong
 @Date: 2019-12-20 09:39:34
 LastEditors: Conghao Wong
-LastEditTime: 2020-10-17 16:30:37
+LastEditTime: 2020-10-19 17:52:40
 @Description: classes and methods of training model
 '''
 import os
@@ -353,7 +353,7 @@ class Base_Model():
         agents_batch, test_index = self.prepare_test_agents_batch(agents_batch, test_on_neighbors)
 
         if social_refine:
-            context_maps = [MapManager(agents_batch[index], self.args, calculate_guidance=True) for index in agents_batch]
+            context_maps = [MapManager(agents_batch[index], self.args, calculate_guidance=True) for index in tqdm(agents_batch, desc='Building Map...')]
         
         # run test
         all_loss = []
@@ -589,7 +589,7 @@ class Fiona(Base_Model):
         feature_reshape = tf.reshape(dropout1, [-1, self.n_rp, 64])
         output5 = keras.layers.Dense(2)(feature_reshape) + start_point
 
-        lstm = keras.Model(inputs=positions, outputs=[output5, diag])
+        lstm = keras.Model(inputs=positions, outputs=[output5])
         lstm.build(input_shape=[None, self.obs_frames, 2])
         lstm_optimizer = keras.optimizers.Adam(lr=self.args.lr)
         
